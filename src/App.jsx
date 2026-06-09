@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from "react";
 import { db } from "./firebase.js";
-import { doc, getDoc, setDoc, runTransaction } from "firebase/firestore";
+import { doc, getDoc, runTransaction } from "firebase/firestore";
 
 const MONTHS = [
   { key: "2026-04", label: "4월", fullLabel: "2026년 4월" },
@@ -55,6 +55,7 @@ export default function App() {
   const [prayerPublic, setPrayerPublic] = useState(true);
   const [editingPrayer, setEditingPrayer] = useState(null);
   const [deleteConfirm, setDeleteConfirm] = useState(null);
+  const [submitting, setSubmitting] = useState(false);
 
   const showNotification = useCallback((msg, type = "success") => {
     setNotification({ msg, type });
@@ -84,15 +85,12 @@ export default function App() {
 
   useEffect(() => { loadAllPrayers(); }, [loadAllPrayers]);
 
-  async function savePrayers(monthKey, data) {
-    setPrayers((prev) => ({ ...prev, [monthKey]: data }));
-    try {
-      await setDoc(doc(db, "prayers", monthKey), { items: data });
-    } catch (e) {
-      console.error("Save error:", e);
-      showNotification("저장 중 오류가 발생했습니다.", "error");
-    }
-  }
+  // 30초마다 자동 새로고침 (다른 사람의 기도제목 실시간 반영)
+  useEffect(() => {
+    if (view !== "months") return;
+    const interval = setInterval(() => { loadAllPrayers(); }, 30000);
+    return () => clearInterval(interval);
+  }, [view, loadAllPrayers]);
 
   // --- 로그인/로그아웃 ---
   function doLogin() {
@@ -135,6 +133,8 @@ export default function App() {
       showNotification("기도제목을 입력해주세요.", "error");
       return;
     }
+    if (submitting) return;
+    setSubmitting(true);
     const entry = {
       name: currentUser.name,
       pw: currentUser.pw,
@@ -169,6 +169,8 @@ export default function App() {
     } catch (e) {
       console.error("Submit error:", e);
       showNotification("저장 중 오류가 발생했습니다. 다시 시도해주세요.", "error");
+    } finally {
+      setSubmitting(false);
     }
   }
 
@@ -344,7 +346,7 @@ export default function App() {
                 const selected = selectedMonth === m.key;
                 return (
                   <button key={m.key} type="button" disabled={!active}
-                    onClick={() => { if (active) { setSelectedMonth(m.key); setEditingPrayer(null); setPrayerText(""); setPrayerPublic(true); } }}
+                    onClick={() => { if (active) { setSelectedMonth(m.key); setEditingPrayer(null); setPrayerText(""); setPrayerPublic(true); loadAllPrayers(); } }}
                     style={{ ...S.monthTab, ...(selected && active ? S.monthTabSelected : {}), ...(!active ? S.monthTabDisabled : {}) }}>
                     {m.label}
                   </button>
@@ -369,7 +371,7 @@ export default function App() {
                           style={{ ...S.visBtn, ...(!prayerPublic ? S.visBtnPrivate : {}) }}>🔒 비공개</button>
                       </div>
                       <p style={S.visHint}>{prayerPublic ? "모든 사람이 기도제목을 볼 수 있습니다." : "관리자만 기도제목을 볼 수 있습니다."}</p>
-                      <button type="button" style={S.primaryBtn} onClick={doSubmitPrayer}>기도제목 등록</button>
+                      <button type="button" style={{ ...S.primaryBtn, opacity: submitting ? 0.5 : 1 }} onClick={doSubmitPrayer} disabled={submitting}>{submitting ? "저장 중..." : "기도제목 등록"}</button>
                     </div>
                   </div>
                 )}
@@ -388,7 +390,7 @@ export default function App() {
                       </div>
                       <p style={S.visHint}>{prayerPublic ? "모든 사람이 기도제목을 볼 수 있습니다." : "관리자만 기도제목을 볼 수 있습니다."}</p>
                       <div style={{ display: "flex", gap: "10px" }}>
-                        <button type="button" style={S.primaryBtn} onClick={doSubmitPrayer}>수정 완료</button>
+                        <button type="button" style={{ ...S.primaryBtn, opacity: submitting ? 0.5 : 1 }} onClick={doSubmitPrayer} disabled={submitting}>{submitting ? "저장 중..." : "수정 완료"}</button>
                         <button type="button" style={S.cancelBtn} onClick={() => { setEditingPrayer(null); setPrayerText(""); setPrayerPublic(true); }}>취소</button>
                       </div>
                     </div>
