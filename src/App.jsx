@@ -63,8 +63,8 @@ export default function App() {
   }, []);
 
   // --- Firebase Firestore 읽기/쓰기 ---
-  const loadAllPrayers = useCallback(async () => {
-    setLoading(true);
+  const loadAllPrayers = useCallback(async (silent = false) => {
+    if (!silent) setLoading(true);
     const allPrayers = {};
     for (const m of MONTHS) {
       try {
@@ -85,10 +85,10 @@ export default function App() {
 
   useEffect(() => { loadAllPrayers(); }, [loadAllPrayers]);
 
-  // 30초마다 자동 새로고침 (다른 사람의 기도제목 실시간 반영)
+  // 30초마다 자동 새로고침 (다른 사람의 기도제목 조용히 반영)
   useEffect(() => {
     if (view !== "months") return;
-    const interval = setInterval(() => { loadAllPrayers(); }, 30000);
+    const interval = setInterval(() => { loadAllPrayers(true); }, 30000);
     return () => clearInterval(interval);
   }, [view, loadAllPrayers]);
 
@@ -161,7 +161,7 @@ export default function App() {
         }
         transaction.set(ref, { items: updated });
       });
-      await loadAllPrayers();
+      await loadAllPrayers(true);
       setPrayerText("");
       setPrayerPublic(true);
       setEditingPrayer(null);
@@ -185,7 +185,7 @@ export default function App() {
         );
         transaction.set(ref, { items: updated });
       });
-      await loadAllPrayers();
+      await loadAllPrayers(true);
       setDeleteConfirm(null);
       showNotification("기도제목이 삭제되었습니다.");
     } catch (e) {
@@ -207,7 +207,7 @@ export default function App() {
           }
         });
       }
-      await loadAllPrayers();
+      await loadAllPrayers(true);
       setDeleteConfirm(null);
       showNotification(`${name}님의 모든 데이터가 삭제되었습니다.`);
     } catch (e) {
@@ -346,7 +346,7 @@ export default function App() {
                 const selected = selectedMonth === m.key;
                 return (
                   <button key={m.key} type="button" disabled={!active}
-                    onClick={() => { if (active) { setSelectedMonth(m.key); setEditingPrayer(null); setPrayerText(""); setPrayerPublic(true); loadAllPrayers(); } }}
+                    onClick={() => { if (active) { setSelectedMonth(m.key); setEditingPrayer(null); setPrayerText(""); setPrayerPublic(true); loadAllPrayers(true); } }}
                     style={{ ...S.monthTab, ...(selected && active ? S.monthTabSelected : {}), ...(!active ? S.monthTabDisabled : {}) }}>
                     {m.label}
                   </button>
