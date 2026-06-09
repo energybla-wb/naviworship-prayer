@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from "react";
 import { db } from "./firebase.js";
-import { doc, getDoc, setDoc } from "firebase/firestore";
+import { doc, getDoc, setDoc, runTransaction } from "firebase/firestore";
 
 const MONTHS = [
   { key: "2026-04", label: "4월", fullLabel: "2026년 4월" },
@@ -129,56 +129,89 @@ export default function App() {
     setPrayerPublic(true);
   }
 
-  // --- 기도제목 CRUD ---
+  // --- 기도제목 CRUD (트랜잭션으로 데이터 손실 방지) ---
   async function doSubmitPrayer() {
     if (!prayerText.trim()) {
       showNotification("기도제목을 입력해주세요.", "error");
       return;
     }
-    const monthPrayers = prayers[selectedMonth] || [];
-    const existing = monthPrayers.findIndex(
-      (p) => p.name === currentUser.name && p.pwHash === currentUser.pwHash
-    );
     const entry = {
       name: currentUser.name,
       pw: currentUser.pw,
       pwHash: currentUser.pwHash,
       text: prayerText.trim(),
       isPublic: prayerPublic,
-      createdAt: existing >= 0 ? monthPrayers[existing].createdAt : new Date().toISOString(),
       updatedAt: new Date().toISOString(),
     };
-    let updated;
-    if (existing >= 0) {
-      updated = [...monthPrayers];
-      updated[existing] = entry;
-    } else {
-      updated = [...monthPrayers, entry];
+    try {
+      const ref = doc(db, "prayers", selectedMonth);
+      await runTransaction(db, async (transaction) => {
+        const snap = await transaction.get(ref);
+        const current = snap.exists() ? snap.data().items || [] : [];
+        const existing = current.findIndex(
+          (p) => p.name === currentUser.name && p.pwHash === currentUser.pwHash
+        );
+        entry.createdAt = existing >= 0 ? current[existing].createdAt : new Date().toISOString();
+        let updated;
+        if (existing >= 0) {
+          updated = [...current];
+          updated[existing] = entry;
+        } else {
+          updated = [...current, entry];
+        }
+        transaction.set(ref, { items: updated });
+      });
+      await loadAllPrayers();
+      setPrayerText("");
+      setPrayerPublic(true);
+      setEditingPrayer(null);
+      showNotification("기도제목이 저장되었습니다.");
+    } catch (e) {
+      console.error("Submit error:", e);
+      showNotification("저장 중 오류가 발생했습니다. 다시 시도해주세요.", "error");
     }
-    await savePrayers(selectedMonth, updated);
-    setPrayerText("");
-    setPrayerPublic(true);
-    setEditingPrayer(null);
-    showNotification("기도제목이 저장되었습니다.");
   }
 
-  async function handleDeletePrayer(monthKey, index) {
-    const updated = (prayers[monthKey] || []).filter((_, i) => i !== index);
-    await savePrayers(monthKey, updated);
-    setDeleteConfirm(null);
-    showNotification("기도제목이 삭제되었습니다.");
+  async function handleDeletePrayer(monthKey, prayerName, prayerPwHash) {
+    try {
+      const ref = doc(db, "prayers", monthKey);
+      await runTransaction(db, async (transaction) => {
+        const snap = await transaction.get(ref);
+        const current = snap.exists() ? snap.data().items || [] : [];
+        const updated = current.filter(
+          (p) => !(p.name === prayerName && p.pwHash === prayerPwHash)
+        );
+        transaction.set(ref, { items: updated });
+      });
+      await loadAllPrayers();
+      setDeleteConfirm(null);
+      showNotification("기도제목이 삭제되었습니다.");
+    } catch (e) {
+      console.error("Delete error:", e);
+      showNotification("삭제 중 오류가 발생했습니다.", "error");
+    }
   }
 
   async function handleDeleteUser(name, pwHash) {
-    for (const m of MONTHS) {
-      const monthData = prayers[m.key] || [];
-      const filtered = monthData.filter((p) => !(p.name === name && p.pwHash === pwHash));
-      if (filtered.length !== monthData.length) {
-        await savePrayers(m.key, filtered);
+    try {
+      for (const m of MONTHS) {
+        const ref = doc(db, "prayers", m.key);
+        await runTransaction(db, async (transaction) => {
+          const snap = await transaction.get(ref);
+          const current = snap.exists() ? snap.data().items || [] : [];
+          const filtered = current.filter((p) => !(p.name === name && p.pwHash === pwHash));
+          if (filtered.length !== current.length) {
+            transaction.set(ref, { items: filtered });
+          }
+        });
       }
+      await loadAllPrayers();
+      setDeleteConfirm(null);
+      showNotification(`${name}님의 모든 데이터가 삭제되었습니다.`);
+    } catch (e) {
+      console.error("Delete user error:", e);
+      showNotification("삭제 중 오류가 발생했습니다.", "error");
     }
-    setDeleteConfirm(null);
-    showNotification(`${name}님의 모든 데이터가 삭제되었습니다.`);
   }
 
   function startEdit(prayer) {
@@ -233,7 +266,7 @@ export default function App() {
               <button type="button" style={S.modalConfirmBtn}
                 onClick={() => {
                   if (deleteConfirm.type === "user") handleDeleteUser(deleteConfirm.name, deleteConfirm.pwHash);
-                  else handleDeletePrayer(deleteConfirm.monthKey, deleteConfirm.index);
+                  else handleDeletePrayer(deleteConfirm.monthKey, deleteConfirm.name, deleteConfirm.pwHash);
                 }}>삭제</button>
               <button type="button" style={S.modalCancelBtn}
                 onClick={() => setDeleteConfirm(null)}>취소</button>
@@ -377,7 +410,6 @@ export default function App() {
                     <div style={S.emptyState}>아직 등록된 기도제목이 없습니다.</div>
                   ) : (
                     monthPrayers.map((prayer, idx) => {
-                      const realIdx = (prayers[selectedMonth] || []).indexOf(prayer);
                       return (
                         <div key={idx} style={S.prayerCard}>
                           <div style={S.prayerHeader}>
@@ -394,7 +426,7 @@ export default function App() {
                               <div style={S.prayerActions}>
                                 {isOwner(prayer) && <button type="button" style={S.actionBtn} onClick={() => startEdit(prayer)}>수정</button>}
                                 <button type="button" style={{ ...S.actionBtn, color: "#e74c3c" }}
-                                  onClick={() => setDeleteConfirm({ type: "prayer", monthKey: selectedMonth, index: realIdx, name: prayer.name })}>삭제</button>
+                                  onClick={() => setDeleteConfirm({ type: "prayer", monthKey: selectedMonth, name: prayer.name, pwHash: prayer.pwHash })}>삭제</button>
                               </div>
                             )}
                           </div>
